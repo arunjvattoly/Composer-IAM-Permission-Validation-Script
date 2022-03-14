@@ -16,7 +16,7 @@
   ```
 * Log into the GCP project having failed composer instance,
   ```
-  gcloud auth login
+  gcloud init
   ```
 * Execute the bash script by running
   ```
