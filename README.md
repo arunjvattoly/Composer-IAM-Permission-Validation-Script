@@ -3,7 +3,7 @@
 ### Supports
 * IAM permission validation for Composer 1/2 instances.
 
-### Pre-requisites:
+### Prerequisites:
 * Failed composer instance 
 * Cloud SDK
 
