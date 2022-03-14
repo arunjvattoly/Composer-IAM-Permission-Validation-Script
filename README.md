@@ -1,11 +1,13 @@
 # Composer Troubleshooting scripts:
+
+### Supports
 * IAM permission validation for Composer 1/2 instances.
 
-Pre-requisites:
+### Pre-requisites:
 * Failed composer instance 
 * Cloud SDK
 
-How to use: 
+### How to use: 
 
 * Download the latest script(iamValidation.sh)
 * Make the script executable by running,
