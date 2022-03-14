@@ -1,7 +1,7 @@
 # Composer Troubleshooting scripts:
 
 ### Supports
-* IAM permission validation for Composer 1/2 instances.
+* IAM permission validation for Composer 1, 2 instances.
 
 ### Prerequisites:
 * Failed composer instance 
