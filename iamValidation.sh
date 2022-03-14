@@ -113,9 +113,7 @@ echo ==============================================
 echo
 #Checking Composer 2 specific GCE permission
 if [[ $version == composer-2* && $default_sa != $service_account ]];then
-echo "In Auto pilot GKE it is necessary to have active default Compute Engine SA."
-echo "default Compute Engine service account: $default_sa"
-
+echo "In Auto pilot GKE it is necessary to have active default Compute Engine SA: $default_sa"
 echo ------------configured roles------------------
 gcloud projects get-iam-policy $project_id  \
 --flatten="bindings[].members" \
