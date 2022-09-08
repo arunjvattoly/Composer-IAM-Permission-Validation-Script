@@ -1,10 +1,10 @@
 #!/bin/bash
-#title           :iamValidation.sh
-#description     :This script will validate composer IAM permissions.
-#owner           :arunjvattoly
-#contributor     :arunjvattoly ,
-#date            :Dec 07, 2021
-#version         :0.1
+#title           :composerValidation.sh
+#description     :This script will validate composer IAM permissions without requiring an environment in failed state
+#owner           :mgtca
+#contributor     :arunjvattoly, mgtca
+#version         :1.1 | Arun  | Dec 07 2021 | initial commit to verify composer 1 & 2 IAM permissions
+#                :1.2 | Marco | Aug 23 2022 | implemented validations for non existing composer instance
 #==============================================================================
 #color theme
 red=$'\e[31m'
@@ -14,7 +14,8 @@ blue=$'\e[34m'
 nc=$'\e[0m'
 
 project_id=$(gcloud config list core/project --format='value(core.project)')
-echo
+
+#### Service or host ####
 echo "Please confirm project id: $project_id is : "
 PS3="Please enter your numeric choice: "
 select project_type in "composer project" "network host project";
@@ -32,33 +33,18 @@ do
     fi
 done
 echo
-read -p 'Enter location of the composer instance (eg: us-central1): ' location
+
+#### Obtaining necessary values ####
+read -p 'Composer instance location (e.g. us-central1): ' location
+read -p 'Env. Subnet (as in projects/<project-id>/regions/<region>/subnetworks/<subnet-id>): ' subnetwork
 if [[ $env = 'SERVICE' ]]; then
-echo
-echo "Select composer instance to troubleshoot"
-select composer_instance in $(gcloud composer environments list --locations=$location --format='value(name)');
-do
-    if [ -z "$composer_instance" ]; then
-        echo "Invalid selection"
-    else
-        echo "You have selected composer instance: $composer_instance"
-        break
-    fi
-done
-service_account=$(gcloud composer environments describe \
-    $composer_instance \
-    --location $location --format="value(config.nodeConfig.serviceAccount)")
+read -p 'Environment service account: ' service_account
 project_number=$(gcloud projects describe $project_id --format="value(projectNumber)")
 default_sa=$project_number-compute@developer.gserviceaccount.com
-is_private=$(gcloud composer environments describe \
-    $composer_instance \
-    --location $location --format="value(config.privateEnvironmentConfig.enablePrivateEnvironment)")
-version=$(gcloud composer environments describe \
-    $composer_instance \
-    --location $location --format="value(config.softwareConfig.imageVersion)")
-subnetwork=$(gcloud composer environments describe \
-    $composer_instance \
-    --location $location --format="value(config.nodeConfig.subnetwork)")
+read -p 'Private IP Env.? (True or False) press Enter for default True: ' is_private
+is_private=${is_private:-True}
+read -p 'Composer Version (1 or 2) press Enter for default 2: ' version
+version=${version:-2}
 host_project_id=`echo $subnetwork | awk -F'/' '{print $2}'`
  if [ $project_id != $host_project_id ]; then
     is_sharedVPC='True'
@@ -66,10 +52,11 @@ else
     is_sharedVPC='False'
 fi
 echo
+
+#### Composer Instance Details ####
 echo -e "${yellow}============ Composer Instance details =============="
 echo -e "Project ID: $project_id"
 echo -e "Project Number: $project_number"
-echo -e "Composer Instance: $composer_instance"
 echo -e "location: $location"
 echo -e "Shared VPC: $is_sharedVPC"
 if [ "$is_sharedVPC" == 'True' ];then
@@ -79,6 +66,7 @@ echo -e "Is Private: ${is_private:-False}"
 echo -e "Composer version: $version"
 echo -e "=====================================================${nc}"
 echo
+
 #### Verifying if SA is from different project #####
 domain=`echo "$service_account" | awk -F@ '{print $2}'`
 service_account_project=`echo "$domain" | awk -F. '{print $1}'`
@@ -111,22 +99,12 @@ gcloud projects get-iam-policy $project_id  \
 --filter="bindings.members:$service_account"  | GREP_COLOR='01;32' egrep --color -E $condition'|$'
 echo ==============================================
 echo
-#Checking Composer 2 specific GCE permission
-if [[ $version == composer-2* && $default_sa != $service_account ]];then
-echo "In Auto pilot GKE it is necessary to have active default Compute Engine SA: $default_sa"
-echo ------------configured roles------------------
-gcloud projects get-iam-policy $project_id  \
---flatten="bindings[].members" \
---format='table[box,no-heading](bindings.role)' \
---filter="bindings.members:$default_sa"
-echo ==============================================
-echo
-fi
-#Checking Composer Agent Service Account
+
+#### Checking Composer Agent Service Account ####
 echo "Composer Agent Service Account: service-$project_number@cloudcomposer-accounts.iam.gserviceaccount.com"
 echo "Need 'roles/composer.serviceAgent'"
 condition="roles/composer.serviceAgent"
-if [[ $version == composer-2* ]];then
+if [[ $version == 2 ]];then
 echo "Need 'roles/composer.ServiceAgentV2Ext' ( Cloud Composer v2 API Service Agent Extension) for Composer 2 instances"
 condition="roles/composer.serviceAgent|roles/composer.ServiceAgentV2Ext"
 fi
@@ -137,7 +115,8 @@ gcloud projects get-iam-policy $project_number  \
 --filter="bindings.members:service-$project_number@cloudcomposer-accounts.iam.gserviceaccount.com" | GREP_COLOR='01;32' egrep --color -E $condition'|$'
 echo ==============================================
 echo
-#Cloud Build Service Account
+
+#### Cloud Build Service Account ####
 echo "Cloud build service account: $project_number@cloudbuild.gserviceaccount.com"
 echo "Need 'roles/cloudbuild.builds.builder'"
 condition="roles/cloudbuild.builds.builder"
@@ -148,8 +127,9 @@ gcloud projects get-iam-policy $project_id  \
 --filter="bindings.members:$project_number@cloudbuild.gserviceaccount.com" | GREP_COLOR='01;32' egrep --color -E $condition'|$'
 echo ==============================================
 echo
-#Compute Network User
-#Editor
+
+#### Compute Network User ####
+#### Editor ####
 echo "Google APIs service account: $project_number@cloudservices.gserviceaccount.com"
 echo "Need 'roles/editor'"
 condition="roles/editor"
@@ -160,7 +140,8 @@ gcloud projects get-iam-policy $project_id  \
 --filter="bindings.members:$project_number@cloudservices.gserviceaccount.com" | GREP_COLOR='01;32' egrep --color -E $condition'|$'
 echo ==============================================
 echo
-#ORG Policy Violations
+
+#### ORG Policy Violations ####
 echo "ORG Policy Violations ..."
 echo "compute.disableSerialPortLogging, compute.requireOsLogin, compute.vmCanIpForward, compute.requireShieldedVm, compute.vmExternalIpAccess , compute.restrictVpcPeering"
 result=$(gcloud logging read "$(cat <<'FILTER'
@@ -179,7 +160,8 @@ else
 fi
 echo ==============================================
 echo
-#GCE QUOTA
+
+#### GCE QUOTA aka. Managed Instance Group Quota #####
 echo "Managed Instance Group Quota ..."
 result=$(gcloud logging read "$(cat <<'FILTER'
 jsonPayload.message:"googleapi: Error 403: Insufficient regional quota to satisfy request:"
@@ -195,29 +177,20 @@ fi
 echo ==============================================
 echo
 
-
-echo ==============================================
-if [ "$is_private" == 'True' ];then
-echo "Network details"
-echo ------------configured roles------------------
-gcloud composer environments describe \
-    $composer_instance \
-    --location $location --format="table(config.privateEnvironmentConfig)"
-echo ==============================================
-echo
-fi
 if [ "$is_sharedVPC" == 'True' ];then
 echo -e "${yellow} Since this is a shared VPC network please run this script again after logging into network host project: $host_project_id ${nc}"
 echo
 fi
+
 else
-read -p 'SUBNET: ' SUBNET
-read -p 'COMPOSER PROJECT NUMBER: ' project_number
+
+read -p 'Service Project Number (project number of project where composer env. will live): ' project_number
 host_project_id=$(gcloud config list core/project --format='value(core.project)')
 host_project_number=$(gcloud projects describe $project_id --format="value(projectNumber)")
 echo ==============================================
 echo
-#Checking Google APIs service account
+
+#### Checking Google APIs service account #####
 echo "Google APIs service account: $project_number@cloudservices.gserviceaccount.com"
 echo "Need 'roles/compute.networkUser' in the host project (PROJECT LEVEL)"
 condition="roles/compute.networkUser"
@@ -228,7 +201,8 @@ gcloud projects get-iam-policy $host_project_id  \
 --filter="bindings.members:$project_number@cloudservices.gserviceaccount.com" | GREP_COLOR='01;32' egrep --color -E $condition'|$'
 echo ==============================================
 echo
-#Checking service project GKE service account at project level
+
+#### Checking service project GKE service account at project level ####
 echo "Service project GKE service account: service-$project_number@container-engine-robot.iam.gserviceaccount.com"
 echo "Need 'roles/container.hostServiceAgentUser' in the host project"
 echo "Need 'compute.networkUser' at project / subnet level"
@@ -239,14 +213,16 @@ gcloud projects get-iam-policy $host_project_id  \
 --format='table[box,no-heading](bindings.role)' \
 --filter="bindings.members:service-$project_number@container-engine-robot.iam.gserviceaccount.com" | GREP_COLOR='01;32' egrep --color -E $condition'|$'
 echo -----configured roles at subnet level --------
-#Checking GKE service account at subnet level
+
+#### Checking GKE service account at subnet level ####
 condition="roles/compute.networkUser"
-gcloud compute networks subnets get-iam-policy $SUBNET --region $location  \
+gcloud compute networks subnets get-iam-policy $subnetwork --region $location  \
 --project $host_project_id --flatten='bindings[].members' --format='table[box,no-heading](bindings.role)' \
 --filter="bindings.members:service-$project_number@container-engine-robot.iam.gserviceaccount.com" | GREP_COLOR='01;32' egrep --color -E $condition'|$'
 echo ==============================================
 echo
-#Checking host project GKE service account at project level
+
+#### Checking host project GKE service account at project level ####
 echo "Host project GKE service account: service-$host_project_number@container-engine-robot.iam.gserviceaccount.com"
 echo "Need 'container.serviceAgent' in the host project"
 condition="roles/container.serviceAgent"
@@ -257,7 +233,8 @@ gcloud projects get-iam-policy $host_project_id  \
 --filter="bindings.members:service-$host_project_number@container-engine-robot.iam.gserviceaccount.com" | GREP_COLOR='01;32' egrep --color -E $condition'|$'
 echo ==============================================
 echo
-#Checking Composer Agent Service Account
+
+#### Checking Composer Agent Service Account ####
 echo "Composer Agent Service Account at project level: service-$project_number@cloudcomposer-accounts.iam.gserviceaccount.com"
 echo "Need 'roles/composer.sharedVpcAgent' for Private Instance"
 echo "Need 'roles/compute.networkUser' for Public Instance"
