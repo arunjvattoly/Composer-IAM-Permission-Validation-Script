@@ -4,7 +4,7 @@
 #owner           :arunjvattoly
 #contributor     :arunjvattoly ,
 #date            :Dec 07, 2021
-#version         :0.1
+#version         :0.2 | 22-Feb-2022
 #==============================================================================
 #color theme
 red=$'\e[31m'
@@ -65,6 +65,14 @@ host_project_id=`echo $subnetwork | awk -F'/' '{print $2}'`
 else
     is_sharedVPC='False'
 fi
+kms_key=$(gcloud composer environments describe \
+    $composer_instance \
+    --location $location --format="value(config.encryptionConfig.kmsKeyName)")
+ if [ -z "$kms_key" ]; then
+    is_cmek_encrypted='False'
+ else
+    is_cmek_encrypted='True'
+ fi
 echo
 echo -e "${yellow}============ Composer Instance details =============="
 echo -e "Project ID: $project_id"
@@ -76,6 +84,7 @@ if [ "$is_sharedVPC" == 'True' ];then
 echo -e "Shared VPC network: $subnetwork"
 fi
 echo -e "Is Private: ${is_private:-False}"
+echo -e "CMEK Enabled: ${is_cmek_encrypted}"
 echo -e "Composer version: $version"
 echo -e "=====================================================${nc}"
 echo
@@ -96,7 +105,10 @@ if [ $default_sa == $service_account ];then
     echo "Need 'roles/editor' to default service account"
     condition="roles/editor"
 else
-    if [ "$is_private" == 'True' ];then
+    if [ "$is_private" == 'True' && $version == composer-2* ];then
+        echo "Need 'roles/composer.worker' for PRIVATE IP instance"
+        condition="roles/composer.worker"
+    elif [ "$is_private" == 'True' ];then
         echo "Need 'roles/composer.worker' and 'roles/iam.serviceAccountUser' for PRIVATE IP instance"
         condition="roles/composer.worker|roles/iam.serviceAccountUser"
     else
@@ -111,17 +123,6 @@ gcloud projects get-iam-policy $project_id  \
 --filter="bindings.members:$service_account"  | GREP_COLOR='01;32' egrep --color -E $condition'|$'
 echo ==============================================
 echo
-#Checking Composer 2 specific GCE permission
-if [[ $version == composer-2* && $default_sa != $service_account ]];then
-echo "In Auto pilot GKE it is necessary to have active default Compute Engine SA: $default_sa"
-echo ------------configured roles------------------
-gcloud projects get-iam-policy $project_id  \
---flatten="bindings[].members" \
---format='table[box,no-heading](bindings.role)' \
---filter="bindings.members:$default_sa"
-echo ==============================================
-echo
-fi
 #Checking Composer Agent Service Account
 echo "Composer Agent Service Account: service-$project_number@cloudcomposer-accounts.iam.gserviceaccount.com"
 echo "Need 'roles/composer.serviceAgent'"
@@ -159,6 +160,65 @@ gcloud projects get-iam-policy $project_id  \
 --format='table[box,no-heading](bindings.role)' \
 --filter="bindings.members:$project_number@cloudservices.gserviceaccount.com" | GREP_COLOR='01;32' egrep --color -E $condition'|$'
 echo ==============================================
+echo
+#CMEK Validation
+#Cloud KMS CryptoKey Encrypter/Decrypter
+if [[ "$is_cmek_encrypted" == 'True' ]];then
+echo "Cloud Composer Service Agent: service-$project_number@cloudcomposer-accounts.iam.gserviceaccount.com"
+echo "Need 'Cloud KMS CryptoKey Encrypter/Decrypter'"
+condition="roles/cloudkms.cryptoKeyEncrypterDecrypter"
+echo ------------configured roles------------------
+gcloud projects get-iam-policy $project_id  \
+--flatten="bindings[].members" \
+--format='table[box,no-heading](bindings.role)' \
+--filter="bindings.members:service-$project_number@cloudcomposer-accounts.iam.gserviceaccount.com" | GREP_COLOR='01;32' egrep --color -E $condition'|$'
+echo ==============================================
+echo
+echo "Artifact Registry Service Agent: service-$project_number@gcp-sa-artifactregistry.iam.gserviceaccount.com"
+echo "Need 'Cloud KMS CryptoKey Encrypter/Decrypter'"
+echo ------------configured roles------------------
+gcloud projects get-iam-policy $project_id  \
+--flatten="bindings[].members" \
+--format='table[box,no-heading](bindings.role)' \
+--filter="bindings.members:service-$project_number@gcp-sa-artifactregistry.iam.gserviceaccount.com" | GREP_COLOR='01;32' egrep --color -E $condition'|$'
+echo ==============================================
+echo
+echo "GKE Service Agent: service-$project_number@container-engine-robot.iam.gserviceaccount.com"
+echo "Need 'Cloud KMS CryptoKey Encrypter/Decrypter'"
+echo ------------configured roles------------------
+gcloud projects get-iam-policy $project_id  \
+--flatten="bindings[].members" \
+--format='table[box,no-heading](bindings.role)' \
+--filter="bindings.members:service-$project_number@container-engine-robot.iam.gserviceaccount.com" | GREP_COLOR='01;32' egrep --color -E $condition'|$'
+echo ==============================================
+echo
+echo "Pub/Sub Service Agent: service-$project_number@gcp-sa-pubsub.iam.gserviceaccount.com"
+echo "Need 'Cloud KMS CryptoKey Encrypter/Decrypter'"
+echo ------------configured roles------------------
+gcloud projects get-iam-policy $project_id  \
+--flatten="bindings[].members" \
+--format='table[box,no-heading](bindings.role)' \
+--filter="bindings.members:service-$project_number@gcp-sa-pubsub.iam.gserviceaccount.com" | GREP_COLOR='01;32' egrep --color -E $condition'|$'
+echo ==============================================
+echo
+echo "Compute Engine Service Agent: service-$project_number@compute-system.iam.gserviceaccount.com"
+echo "Need 'Cloud KMS CryptoKey Encrypter/Decrypter'"
+echo ------------configured roles------------------
+gcloud projects get-iam-policy $project_id  \
+--flatten="bindings[].members" \
+--format='table[box,no-heading](bindings.role)' \
+--filter="bindings.members:service-$project_number@compute-system.iam.gserviceaccount.com" | GREP_COLOR='01;32' egrep --color -E $condition'|$'
+echo ==============================================
+echo
+echo "Cloud Storage Service Agent: service-$project_number@gs-project-accounts.iam.gserviceaccount.com"
+echo "Need 'Cloud KMS CryptoKey Encrypter/Decrypter'"
+echo ------------configured roles------------------
+gcloud projects get-iam-policy $project_id  \
+--flatten="bindings[].members" \
+--format='table[box,no-heading](bindings.role)' \
+--filter="bindings.members:service-$project_number@gs-project-accounts.iam.gserviceaccount.com" | GREP_COLOR='01;32' egrep --color -E $condition'|$'
+echo ==============================================
+fi
 echo
 #ORG Policy Violations
 echo "ORG Policy Violations ..."
