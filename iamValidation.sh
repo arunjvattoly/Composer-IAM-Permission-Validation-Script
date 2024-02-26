@@ -59,8 +59,8 @@ version=$(gcloud composer environments describe \
 subnetwork=$(gcloud composer environments describe \
     $composer_instance \
     --location $location --format="value(config.nodeConfig.subnetwork)")
-host_project_id=`echo $subnetwork | awk -F'/' '{print $2}'`
- if [ $project_id != $host_project_id ]; then
+host_project_id=$(echo $subnetwork | awk -F'/' '{print $2}')
+if [ "$project_id" != "$host_project_id" ]; then
     is_sharedVPC='True'
 else
     is_sharedVPC='False'
