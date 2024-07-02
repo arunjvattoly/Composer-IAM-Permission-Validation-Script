@@ -19,7 +19,7 @@ default_sa=$project_number-compute@developer.gserviceaccount.com
 
 echo "Current Project ID: $project_id"
 # Project Type Selection
-if [[ $# -eq 4 ]]; then #if all 3 args provided, no need to ask for customer / network project.
+if [[ $# -eq 5 ]]; then #if all 3 args provided, no need to ask for customer / network project.
     project_type=2
 else
     echo "Select Project Type:"
@@ -101,7 +101,7 @@ if [[ $project_type == 1 ]]; then
             read -p "Enter Subnet in form 'projects/<project-id>/regions/<region>/subnetworks/<subnet-id>, press Enter for default network: " subnetwork
             subnetwork=${subnetwork:-"projects/$project_id/regions/$location/subnetworks/default"}
             read -p 'Enter Service Account: ' service_account
-            read -p "Enter Composer Version (1 or 2), press Enter for default 2: " version
+            read -p "Enter Composer Version (1, 2 or 3), press Enter for default 2: " version
             version=${version:-2}
             read -p 'Enter True for Private, press Enter for default True)' is_private
             is_private=${is_private:-True}
@@ -242,7 +242,7 @@ if [[ $project_type == 1 ]]; then
 
     if [[ "$is_sharedVPC" == 'True' ]]; then
         echo -e "${yellow} Since this is a shared VPC network please run below command after logging into network host project: $host_project_id ${nc}"
-        echo "./iamValidation.sh $subnetwork $project_number $location $is_private"
+        echo "./iamValidation.sh $subnetwork $project_number $location $is_private $project_number"
         echo
     fi
 
@@ -252,6 +252,7 @@ elif [[ $project_type == 2 ]]; then # Verifying Network Host Project IAM permiss
     project_number=$2
     location=$3
     is_private=$4
+    project_number=$5
     if [[ -z "$SUBNET" ]]; then
         read -p 'Enter subnet name: ' SUBNET
     elif [[ -z "$project_number" ]]; then
@@ -275,7 +276,8 @@ elif [[ $project_type == 2 ]]; then # Verifying Network Host Project IAM permiss
     echo "Service project GKE service account: service-$project_number@container-engine-robot.iam.gserviceaccount.com"
     condition="roles/container.hostServiceAgentUser"
     check_role "service-$project_number@container-engine-robot.iam.gserviceaccount.com" $condition
-
+    
+    echo "Service project GKE service account: service-$project_number@container-engine-robot.iam.gserviceaccount.com"
     echo "Need 'roles/compute.networkUser' at project level / subnetwork level"
     condition="roles/compute.networkUser"
     if ! check_role "service-$project_number@container-engine-robot.iam.gserviceaccount.com" $condition; then
