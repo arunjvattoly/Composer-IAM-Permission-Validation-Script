@@ -57,6 +57,7 @@ highlight_roles() {
     if [[ $has_missing_permissions == 1 ]]; then
         echo ========================== Existing roles =================================
         printf "$existing_roles \n"
+        return 1
     fi
     echo ===========================================================================
 }
@@ -242,7 +243,7 @@ if [[ $project_type == 1 ]]; then
 
     if [[ "$is_sharedVPC" == 'True' ]]; then
         echo -e "${yellow} Since this is a shared VPC network please run below command after logging into network host project: $host_project_id ${nc}"
-        echo "./iamValidation.sh $subnetwork $project_number $location $is_private $project_number"
+        echo "./iamValidation.sh $subnetwork $project_number $location $is_private"
         echo
     fi
 
@@ -252,7 +253,7 @@ elif [[ $project_type == 2 ]]; then # Verifying Network Host Project IAM permiss
     project_number=$2
     location=$3
     is_private=$4
-    project_number=$5
+    #project_number=$5
     if [[ -z "$SUBNET" ]]; then
         read -p 'Enter subnet name: ' SUBNET
     elif [[ -z "$project_number" ]]; then
