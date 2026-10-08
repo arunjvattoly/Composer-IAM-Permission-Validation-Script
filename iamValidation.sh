@@ -5,6 +5,7 @@
 #date            :Dec 07, 2021
 #version         :0.2 | 22-Feb-2022
 #                :0.3 | 01-June-2024 (Added CMEK and support for validating non existing composer instances)
+#                :0.4 | 04-Aug-2026 (Added support for checking permissions inherited via Google Groups)
 #==============================================================================
 # Color Theme (Simplified)
 red='\033[0;31m'
@@ -29,6 +30,58 @@ else
     project_type=${project_type:-1}
 fi
 
+# Helper function to check if a service account has a role via group membership
+check_role_via_group() {
+    local member=$1
+    local target_role=$2
+    local check_level=$3
+    local resource=$4 # project_id, service_account_email, or subnet_name
+    local region=$5   # subnet region (optional)
+    local host_project=$6 # subnet host project (optional)
+    
+    local iam_groups
+    if [[ $check_level == "project" ]]; then
+        iam_groups=$(gcloud projects get-iam-policy "$resource" \
+            --flatten="bindings[].members" \
+            --filter="bindings.role:'$target_role'" \
+            --format="value(bindings.members)" | sed -n 's/^group://p')
+    elif [[ $check_level == "service-account" ]]; then
+        iam_groups=$(gcloud iam service-accounts get-iam-policy "$resource" \
+            --flatten="bindings[].members" \
+            --filter="bindings.role:'$target_role'" \
+            --format="value(bindings.members)" | sed -n 's/^group://p')
+    elif [[ $check_level == "subnet" ]]; then
+        iam_groups=$(gcloud compute networks subnets get-iam-policy "$resource" \
+            --region "$region" --project "$host_project" \
+            --flatten="bindings[].members" \
+            --filter="bindings.role:'$target_role'" \
+            --format="value(bindings.members)" | sed -n 's/^group://p')
+    fi
+        
+    if [[ -z "$iam_groups" ]]; then
+        return 1
+    fi
+    
+    for group in $iam_groups; do
+        if [[ "$group" != *@* ]]; then
+            continue
+        fi
+        
+        local is_member
+        is_member=$(gcloud identity groups memberships check-transitive-membership \
+            --group-email="$group" \
+            --member-email="$member" \
+            --format="value(hasMembership)" 2>/dev/null)
+            
+        if [[ "$is_member" == "True" || "$is_member" == "true" ]]; then
+            echo "$group"
+            return 0
+        fi
+    done
+    
+    return 1
+}
+
 # Function for highlighting IAM Permissions
 highlight_roles() {
     local required_roles=$1
@@ -42,16 +95,44 @@ highlight_roles() {
 
     echo "Required Roles Status:"
     specific_role="roles/composer.ServiceAgentV2Ext"
-    # Loop over the required roles and check for existence in a single line using grep
+    # Loop over the required roles and check for existence
     for role in "${required_roles[@]}"; do
-        if echo "$existing_roles" | grep -q "$role"; then
-            echo -e "${green}$role (Found)${nc}"
+        local matched_line
+        matched_line=$(echo "$existing_roles" | grep -E "^${role}(\s|$)" | head -n 1)
+        
+        # If not found directly, check if inherited via group
+        if [[ -z "$matched_line" && "$role" == serviceAccount:* ]]; then
+            local sa_email="${role#serviceAccount:}"
+            # Extract all groups from existing_roles
+            local groups
+            groups=$(echo "$existing_roles" | sed -n 's/^group://p')
+            for group in $groups; do
+                if [[ "$group" != *@* ]]; then
+                    continue
+                fi
+                local is_member
+                is_member=$(gcloud identity groups memberships check-transitive-membership \
+                    --group-email="$group" \
+                    --member-email="$sa_email" \
+                    --format="value(hasMembership)" 2>/dev/null)
+                if [[ "$is_member" == "True" || "$is_member" == "true" ]]; then
+                    matched_line="$role (via group: $group)"
+                    break
+                fi
+            done
+        fi
+
+        if [[ -n "$matched_line" ]]; then
+            if [[ "$matched_line" == *"via group"* ]]; then
+                echo -e "${green}$matched_line${nc}"
+            else
+                echo -e "${green}$role (Found)${nc}"
+            fi
         else
             has_missing_permissions=1
             if [[ "$role" != "$specific_role" ]]; then
                 echo -e "${red}$role (Missing)${nc}"
             fi
-
         fi
     done
     if [[ $has_missing_permissions == 1 ]]; then
@@ -66,7 +147,7 @@ highlight_roles() {
 check_role() {
     local service_account=$1
     local required_roles=$2
-    local check_level=${3:-"project"} # Default to "projeßct" level
+    local check_level=${3:-"project"} # Default to "project" level
     local binding_service_Account=$4
     local has_missing_permissions=0
 
@@ -76,12 +157,38 @@ check_role() {
             --flatten="bindings[].members" \
             --format='value(bindings.role)' \
             --filter="bindings.members:$service_account")
+            
+        # Check if missing required roles are granted via groups
+        local required_roles_arr
+        IFS='|' read -ra required_roles_arr <<<"$required_roles"
+        for role in "${required_roles_arr[@]}"; do
+            if ! echo "$existing_roles" | grep -q "$role"; then
+                local group_found
+                group_found=$(check_role_via_group "$service_account" "$role" "project" "$project_id")
+                if [[ -n "$group_found" ]]; then
+                    existing_roles+=$'\n'"$role (via group: $group_found)"
+                fi
+            fi
+        done
     elif [[ $check_level == "service-account" ]]; then
         # Fetch binding service account roles against a service account
         existing_roles=$(gcloud iam service-accounts get-iam-policy $service_account \
             --flatten="bindings[].members" \
             --format='value(bindings.role)' \
             --filter="bindings.members:$binding_service_Account")
+            
+        # Check if missing required roles are granted via groups
+        local required_roles_arr
+        IFS='|' read -ra required_roles_arr <<<"$required_roles"
+        for role in "${required_roles_arr[@]}"; do
+            if ! echo "$existing_roles" | grep -q "$role"; then
+                local group_found
+                group_found=$(check_role_via_group "$binding_service_Account" "$role" "service-account" "$service_account")
+                if [[ -n "$group_found" ]]; then
+                    existing_roles+=$'\n'"$role (via group: $group_found)"
+                fi
+            fi
+        done
     else
         echo "Invalid check level: $check_level. Please use 'project' or 'service-account'."
         return 1
@@ -175,16 +282,13 @@ if [[ $project_type == 1 ]]; then
     fi
     echo "Composer Service Account: $service_account"
     if [ $default_sa == $service_account ]; then
-        #echo "Need 'roles/editor' to default service account"
         check_role "$service_account" "roles/editor"
     else
-        #echo "Need 'roles/composer.worker' for composer service account"
         check_role "$service_account" "roles/composer.worker"
     fi
 
     #Checking Composer Agent Service Account
     echo "Composer Agent Service Account: service-$project_number@cloudcomposer-accounts.iam.gserviceaccount.com"
-    #echo "Need 'roles/composer.serviceAgent'"
     condition="roles/composer.serviceAgent"
     check_role "service-$project_number@cloudcomposer-accounts.iam.gserviceaccount.com" $condition
     if [[ $version == composer-2* || $version == 2 ]]; then
@@ -198,13 +302,11 @@ if [[ $project_type == 1 ]]; then
 
     #Cloud Build Service Account
     echo "Cloud build service account: $project_number@cloudbuild.gserviceaccount.com"
-    #echo "Need 'roles/cloudbuild.builds.builder'"
     condition="roles/cloudbuild.builds.builder"
     check_role "$project_number@cloudbuild.gserviceaccount.com" $condition
 
     #Google APIs service account
     echo "Google APIs service account: $project_number@cloudservices.gserviceaccount.com"
-    #echo "Need 'roles/editor'"
     condition="roles/editor"
     check_role "$project_number@cloudservices.gserviceaccount.com" $condition
 
@@ -234,7 +336,7 @@ if [[ $project_type == 1 ]]; then
             echo "List of service accounts with 'roles/cloudkms.cryptoKeyEncrypterDecrypter' role are:"
             existing_roles=$(gcloud kms keys get-iam-policy "$key_name" --keyring="$key_ring" --location="$key_location" \
                 --flatten="bindings[].members" \
-                --format='table[box,no-heading](bindings.members)' \
+                --format='value(bindings.members)' \
                 --filter="bindings.role:roles/cloudkms.cryptoKeyEncrypterDecrypter")
             highlight_roles "$condition" "${existing_roles[@]}"
 
@@ -253,7 +355,6 @@ elif [[ $project_type == 2 ]]; then # Verifying Network Host Project IAM permiss
     project_number=$2
     location=$3
     is_private=$4
-    #project_number=$5
     if [[ -z "$SUBNET" ]]; then
         read -p 'Enter subnet name: ' SUBNET
     elif [[ -z "$project_number" ]]; then
@@ -283,10 +384,19 @@ elif [[ $project_type == 2 ]]; then # Verifying Network Host Project IAM permiss
     condition="roles/compute.networkUser"
     if ! check_role "service-$project_number@container-engine-robot.iam.gserviceaccount.com" $condition; then
         condition="roles/compute.networkUser"
-        echo -e "${yellow}Missing permissions at project level, checking subnetwork level$.${nc}"
+        echo -e "${yellow}Missing permissions at project level, checking subnetwork level.${nc}"
         existing_roles=$(gcloud compute networks subnets get-iam-policy $SUBNET --region $location \
-            --project $host_project_id --flatten='bindings[].members' --format='table[box,no-heading](bindings.role)' \
+            --project $host_project_id --flatten='bindings[].members' --format='value(bindings.role)' \
             --filter="bindings.members:service-$project_number@container-engine-robot.iam.gserviceaccount.com")
+            
+        if ! echo "$existing_roles" | grep -q "$condition"; then
+            local group_found
+            group_found=$(check_role_via_group "service-$project_number@container-engine-robot.iam.gserviceaccount.com" \
+                "$condition" "subnet" "$SUBNET" "$location" "$host_project_id")
+            if [[ -n "$group_found" ]]; then
+                existing_roles+=$'\n'"$condition (via group: $group_found)"
+            fi
+        fi
         highlight_roles "$condition" "${existing_roles[@]}"
     fi
 
